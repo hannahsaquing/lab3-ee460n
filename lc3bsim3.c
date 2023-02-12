@@ -573,14 +573,114 @@ int main(int argc, char *argv[]) {
    Begin your code here 	  			       */
 /***************************************************************/
 
+int SignExtend(int value, int bits){ // 5, 9, 11, 6, 8 -- taken from lab2
+    switch (bits) {
+      case 5: 
+       if (0x00000010 & value){ 
+        // number is negative
+        return Low16bits(value | 0xFFE0);
+
+       }else{
+        //number is positive
+        return Low16bits(value & 0x001F);
+       }
+      break;
+
+      case 9: 
+       if (0x00000100 & value){ // 0000 0000 0000 0000 0000 0001 0000 0000
+        // number is negative
+        return Low16bits(value | 0xFE00); // 1111 1110 0000 0000
+
+       }else{
+        //number is positive
+        return Low16bits(value & ~0xFE00); // 0000 0001 1111 1111
+       }
+      break;
+
+      case 8:
+      if (0x00000080 & value){ // 0000 0000 0000 0000 0000 0000 1000 0000
+        // number is negative
+        return Low16bits(value | 0xFF00); 
+
+       }else{
+        //number is positive
+        return Low16bits(value & ~0xFF00);
+       }
+      break;
+
+      case 11: 
+      if (0x00000400 & value){ // 0000 0000 0000 0000 0100 0000 0000
+        // number is negative
+        return Low16bits(value | 0xF800); 
+
+       }else{
+        //number is positive
+        return Low16bits(value & ~0xF800);
+       }
+
+      break;
+
+      case 6:
+      if (0x0000020 & value){ // 0010 0000
+        // number is negative
+        return Low16bits(value | 0xFFC0); 
+
+       }else{
+        //number is positive
+        return Low16bits(value & ~0xFFC0);
+       }
+      break;
+    }
+}
+
+int getOpcode(int instruction) {
+    int opcode = instruction >> 12;
+    opcode &= 0x0F;
+    opcode = Low16bits(opcode);
+    return opcode;
+}
 
 void eval_micro_sequencer() {
-
   /* 
    * Evaluate the address of the next state according to the 
    * micro sequencer logic. Latch the next microinstruction.
    */
-
+  
+  // See if you're going to BR
+  int branch = GetIRD(CURRENT_LATCHES.MICROINSTRUCTION);
+  if (branch) {
+    int instruction = CURRENT_LATCHES.IR;
+    int ir11, ir10, ir9;
+    ir11 = (instruction >> 11) & 0x0001;
+    ir10 = (instruction >> 10) & 0x0001;
+    ir9 = (instruction >> 9) & 0x0001;
+    NEXT_LATCHES.BEN = (ir11 && CURRENT_LATCHES.N) || (ir10 && CURRENT_LATCHES.Z) || (ir9 && CURRENT_LATCHES.P);
+    NEXT_LATCHES.STATE_NUMBER = getOpcode(CURRENT_LATCHES.IR);
+  } 
+  // Not branching
+  else {
+    int newSN = GetJ(CURRENT_LATCHES.MICROINSTRUCTION);
+    int cc = GetCOND(CURRENT_LATCHES.MICROINSTRUCTION);
+    // change j based on microinstruction
+    int BEN = 0b10;
+    int ready = 0b01;
+    int addrMode = 0b11;
+    if (cc == BEN) {
+        newSN |= 0b000100;
+    } 
+    else if (cc == ready) {
+        newSN |= 0b000010;
+    }
+    else if (cc == addrMode) {
+        newSN |= 0b000001;
+    }
+    NEXT_LATCHES.STATE_NUMBER = Low16bits(newSN);
+  }
+  int i;
+  int numBits = CONTROL_STORE_BITS;
+  for (i = 0; i < numBits; i++) {
+    NEXT_LATCHES.MICROINSTRUCTION[i] = CONTROL_STORE[NEXT_LATCHES.STATE_NUMBER][i];
+  }
 }
 
 
@@ -602,7 +702,7 @@ void eval_bus_drivers() {
   /* 
    * Datapath routine emulating operations before driving the bus.
    * Evaluate the input of tristate drivers 
-   *             Gate_MARMUX,
+   *         Gate_MARMUX,
    *		 Gate_PC,
    *		 Gate_ALU,
    *		 Gate_SHF,
