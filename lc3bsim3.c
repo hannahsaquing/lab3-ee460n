@@ -574,6 +574,10 @@ int main(int argc, char *argv[]) {
 /***************************************************************/
 
 #define Low8bits(x) ((x) & 0x00FF)
+#define getHighByte(x) (((x) & 0x00FF) << 8) 
+#define writeHighByte(x) (((x) >> 8) 
+
+
 
 int SignExtend(int value, int bits){ // 5, 9, 11, 6, 8 -- taken from lab2
     switch (bits) {
@@ -723,11 +727,21 @@ void cycle_memory() {
     int rw = GetR_W(CURRENT_LATCHES.MICROINSTRUCTION);
     int read = 0;
     int write = 1;
+    int address = CURRENT_LATCHES.MAR / 2;
     if (rw == read) {
-        // do read stuff
+        // do read (LDW, LDB, LEA?)
+        NEXT_LATCHES.MDR = Low8bits(MEMORY[address][0]);
+        NEXT_LATCHES.MDR |= Low8bits(getHighByte(MEMORY[address][1]));
     }
     else if (rw == write) {
-        // do write stuff
+        int word = GetDATA_SIZE(CURRENT_LATCHES.MICROINSTRUCTION);
+        if (word) {
+            MEMORY[address][0] = Low8Bits(CURRENT_LATCHES.MDR);
+            MEMORY[address][1] = Low8bits(writeHighByte(CURRENT_LATCHES.MDR));
+        }
+        else { // otherwise we are writing a byte
+            // look at this later
+        }
     }
     else {
         printf("Ur not supposed to get here\n")
