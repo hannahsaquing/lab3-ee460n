@@ -573,6 +573,8 @@ int main(int argc, char *argv[]) {
    Begin your code here 	  			       */
 /***************************************************************/
 
+#define Low8bits(x) ((x) & 0x00FF)
+
 int SignExtend(int value, int bits){ // 5, 9, 11, 6, 8 -- taken from lab2
     switch (bits) {
       case 5: 
@@ -635,9 +637,17 @@ int SignExtend(int value, int bits){ // 5, 9, 11, 6, 8 -- taken from lab2
 
 int getOpcode(int instruction) {
     int opcode = instruction >> 12;
-    opcode &= 0x0F;
+    opcode &= 0x0F; // 0000 0000 0000 1111
     opcode = Low16bits(opcode);
     return opcode;
+}
+
+void setBEN (int instruction) {
+    int ir11, ir10, ir9;
+    ir11 = (instruction >> 11) & 0x0001;
+    ir10 = (instruction >> 10) & 0x0001;
+    ir9 = (instruction >> 9) & 0x0001;
+    NEXT_LATCHES.BEN = (ir11 && CURRENT_LATCHES.N) || (ir10 && CURRENT_LATCHES.Z) || (ir9 && CURRENT_LATCHES.P);
 }
 
 void eval_micro_sequencer() {
@@ -648,19 +658,17 @@ void eval_micro_sequencer() {
   
   // See if you're going to BR
   int branch = GetIRD(CURRENT_LATCHES.MICROINSTRUCTION);
+  int newSN;
   if (branch) {
     int instruction = CURRENT_LATCHES.IR;
-    int ir11, ir10, ir9;
-    ir11 = (instruction >> 11) & 0x0001;
-    ir10 = (instruction >> 10) & 0x0001;
-    ir9 = (instruction >> 9) & 0x0001;
-    NEXT_LATCHES.BEN = (ir11 && CURRENT_LATCHES.N) || (ir10 && CURRENT_LATCHES.Z) || (ir9 && CURRENT_LATCHES.P);
-    NEXT_LATCHES.STATE_NUMBER = getOpcode(CURRENT_LATCHES.IR);
+    setBEN(instruction);
+    newSN = getOpcode(instruction);
   } 
   // Not branching
   else {
-    int newSN = GetJ(CURRENT_LATCHES.MICROINSTRUCTION);
+    newSN = GetJ(CURRENT_LATCHES.MICROINSTRUCTION);
     int cc = GetCOND(CURRENT_LATCHES.MICROINSTRUCTION);
+    
     // change j based on microinstruction
     int BEN = 0b10;
     int ready = 0b01;
@@ -674,8 +682,8 @@ void eval_micro_sequencer() {
     else if (cc == addrMode) {
         newSN |= 0b000001;
     }
-    NEXT_LATCHES.STATE_NUMBER = Low16bits(newSN);
   }
+  NEXT_LATCHES.STATE_NUMBER = Low16bits(newSN);
   int i;
   int numBits = CONTROL_STORE_BITS;
   for (i = 0; i < numBits; i++) {
@@ -683,6 +691,7 @@ void eval_micro_sequencer() {
   }
 }
 
+int men = 0;
 
 void cycle_memory() {
  
@@ -693,6 +702,37 @@ void cycle_memory() {
    * cycle to prepare microsequencer for the fifth cycle.  
    */
 
+  int mio_en = GetMIO_EN(CURRENT_LATCHES.MICROINSTRUCTION);
+  if (mio_en) {
+    men++;
+  }
+  else {
+    return; // shouldn't mess with memory enable counter if the instr doesn't need mem
+  }
+  if (men < 4) {
+    NEXT_LATCHES.READY = 0;
+    printf("\n\nMemory bit not yet asserted, still on cycle %d/5\n\n", men);
+  }
+  else {
+    NEXT_LATCHES.READY = 1;
+  }
+  if (CURRENT_LATCHES.READY) {
+    // change from word addressable to byte addressable
+    int addy = CURRENT_LATCHES.MAR / 2;
+    // determine if read or write
+    int rw = GetR_W(CURRENT_LATCHES.MICROINSTRUCTION);
+    int read = 0;
+    int write = 1;
+    if (rw == read) {
+        // do read stuff
+    }
+    else if (rw == write) {
+        // do write stuff
+    }
+    else {
+        printf("Ur not supposed to get here\n")
+    }
+  }
 }
 
 
