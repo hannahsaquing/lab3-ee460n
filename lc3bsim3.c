@@ -656,7 +656,6 @@ int SignExtend(int value, int bits){ // 5, 9, 11, 6, 8 -- taken from lab2
 int getOpcode(int instruction) {
     int opcode = instruction >> 12;
     opcode &= 0x0F; // 0000 0000 0000 1111
-    opcode = Low16bits(opcode);
     return opcode;
 }
 
@@ -669,49 +668,48 @@ void setBEN (int instruction) {
 }
 
 void eval_micro_sequencer() {
+    printf("Starting eval_micro_sequencer()...\n");
+    printf("CURRENT STATE:%.4x\n", CURRENT_LATCHES.STATE_NUMBER);
+
   /* 
    * Evaluate the address of the next state according to the 
    * micro sequencer logic. Latch the next microinstruction.
    */
   
   // See if you're going to BR
-  int branch = GetIRD(CURRENT_LATCHES.MICROINSTRUCTION);
-  int newSN;
-  if (branch) {
-    int instruction = CURRENT_LATCHES.IR;
-    newSN = getOpcode(instruction);
-  } 
-  // Not branching
-  else {
-    newSN = GetJ(CURRENT_LATCHES.MICROINSTRUCTION);
-    int cc = GetCOND(CURRENT_LATCHES.MICROINSTRUCTION);
-    
-    // change j based on microinstruction
-    int BEN = 0b10;
-    int ready = 0b01;
-    int addrMode = 0b11;
-    if (cc == BEN) {
-        newSN |= 0b000100;
-    } 
-    else if (cc == ready) {
-        newSN |= 0b000010;
-    }
-    else if (cc == addrMode) {
-        newSN |= 0b000001;
-    }
+  int instr = GetIRD(CURRENT_LATCHES.MICROINSTRUCTION);
+  if (instr) {
+    NEXT_LATCHES.STATE_NUMBER = getOpcode(CURRENT_LATCHES.IR);
+    //printf("GOT OPCODE\n");
   }
-  NEXT_LATCHES.STATE_NUMBER = Low16bits(newSN);
+  else {
+    //printf("Didn't get IRD...\n");
+    NEXT_LATCHES.STATE_NUMBER = GetJ(CURRENT_LATCHES.MICROINSTRUCTION);
+    //printf("Condition bits 10 are %d\n", GetCOND(CURRENT_LATCHES.MICROINSTRUCTION));
+    if (GetCOND(CURRENT_LATCHES.MICROINSTRUCTION) == 0b10 && CURRENT_LATCHES.BEN) {
+        //printf("BEN ENABLED\n");
+        NEXT_LATCHES.STATE_NUMBER |= 0x04;
+    }
+    if (GetCOND(CURRENT_LATCHES.MICROINSTRUCTION) == 0b01 && CURRENT_LATCHES.READY) {
+        //printf("READY BIT ASSERTED\n");
+        NEXT_LATCHES.STATE_NUMBER |= 0x02;
+    }
+    if (GetCOND(CURRENT_LATCHES.MICROINSTRUCTION) == 0b11) {
+        //printf("ADDR MODE\n");
+        NEXT_LATCHES.STATE_NUMBER |= 0x01;
+    }
+  }  //printf("Headed to state %.4x\n", NEXT_LATCHES.STATE_NUMBER);
   int i;
   int numBits = CONTROL_STORE_BITS;
   for (i = 0; i < numBits; i++) {
     NEXT_LATCHES.MICROINSTRUCTION[i] = CONTROL_STORE[NEXT_LATCHES.STATE_NUMBER][i];
   }
+  //printf("Next state: 0x%.4x\n", NEXT_LATCHES.STATE_NUMBER);
 }
-
 int men = 0;
 
 void cycle_memory() {
- 
+    printf("Starting cycle_memory()...\n");
   /* 
    * This function emulates memory and the WE logic. 
    * Keep track of which cycle of MEMEN we are dealing with.  
@@ -724,17 +722,20 @@ void cycle_memory() {
     men++;
   }
   else {
+    printf("memory not enabled, returning...\n");
     return; // shouldn't mess with memory enable counter if the instr doesn't need mem
   }
   if (men < 4) {
     NEXT_LATCHES.READY = 0;
-    printf("\n\nMemory bit not yet asserted, still on cycle %d/5\n\n", men);
+    //printf("men:%d\n\n", men);
   }
   else {
+    //printf("Next Latch: READY\n");
     NEXT_LATCHES.READY = 1;
   }
   if (CURRENT_LATCHES.READY) {
     // change from word addressable to byte addressable
+    //printf("Current latch READY\n");
     int addy = CURRENT_LATCHES.MAR / 2;
     // determine if read or write
     int rw = GetR_W(CURRENT_LATCHES.MICROINSTRUCTION);
@@ -743,11 +744,13 @@ void cycle_memory() {
     int address = CURRENT_LATCHES.MAR / 2;
     if (rw == read) {
         // do read (LDW, LDB, LEA?)
-        NEXT_LATCHES.MDR = (MEMORY[address][0]);
+        //printf("READING...\n");
         NEXT_LATCHES.MDR = Low8bits(MEMORY[address][0]);
-        NEXT_LATCHES.MDR |= Low8bits(getHighByte(MEMORY[address][1]));
+        NEXT_LATCHES.MDR |= (getHighByte(MEMORY[address][1]));
+        //printf("Next_latches MDR: 0x%.4x\n", NEXT_LATCHES.MDR);
     }
     else if (rw == write) {
+        //printf("WRITING...\n");
         int word = GetDATA_SIZE(CURRENT_LATCHES.MICROINSTRUCTION);
         if (word) {
             MEMORY[address][0] = Low8bits(CURRENT_LATCHES.MDR);
@@ -759,9 +762,10 @@ void cycle_memory() {
         }
     }
     else {
-        printf("Ur not supposed to get here\n");
+        //printf("Ur not supposed to get here\n");
     }
     NEXT_LATCHES.READY = 0;
+    //printf("Next_latch READY set to 0\n");
     men = 0; //per usual
   }
 }
@@ -782,6 +786,7 @@ int bit(int x, int y) {
   return (((x) & (1 << y)) >> y);} 
 
 void eval_bus_drivers() {
+    printf("Starting eval_bus_drivers\n");
     int origin, addition, regLocation, usePC;
   /* 
    * Datapath routine emulating operations before driving the bus.
@@ -793,22 +798,50 @@ void eval_bus_drivers() {
    *		 Gate_MDR.
    */    
   if (GetGATE_MARMUX(CURRENT_LATCHES.MICROINSTRUCTION)) {
+    printf("Driving MARMAX...\n");
     driveMM = 1;
-    int marmux_1 = GetMARMUX(CURRENT_LATCHES.MICROINSTRUCTION); // select LSHF(ZEXT[IR[7:0]],1)
-    if (!marmux_1) {
+    //int marmux_1 = GetMARMUX(CURRENT_LATCHES.MICROINSTRUCTION); // select LSHF(ZEXT[IR[7:0]],1)
+    printf("MARMUX = %d\n", GetMARMUX(CURRENT_LATCHES.MICROINSTRUCTION));
+    if (GetMARMUX(CURRENT_LATCHES.MICROINSTRUCTION) == 0) {
         Gate_MARMUX = Low8bits(CURRENT_LATCHES.IR) << 1;
+        //Gate_MARMUX = SignExtend(Low8bits(CURRENT_LATCHES.IR) << 1, 8);
     }
     else {
-        origin = (GetADDR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) ? CURRENT_LATCHES.PC : (GetSR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) ? CURRENT_LATCHES.REGS[getRegNum(6)] : CURRENT_LATCHES.REGS[getRegNum(9)];
+        //origin = (GetADDR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) ? CURRENT_LATCHES.PC : ((GetSR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) ? CURRENT_LATCHES.REGS[getRegNum(6)] : CURRENT_LATCHES.REGS[getRegNum(9)]);
+        if (!GetADDR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) {
+            //printf("origin = current pc\n");
+            origin = CURRENT_LATCHES.PC;
+            printf("Origin PC: 0x%.4x\n", origin);
+
+        }
+        else {
+            //printf("Getting origin from PC mux\n");
+            origin = ((GetSR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) ? CURRENT_LATCHES.REGS[getRegNum(6)] : CURRENT_LATCHES.REGS[getRegNum(9)]);
+            printf("Origin address from PC Mux: 0x%.4x\n", origin);
+        }
         int offset = GetADDR2MUX(CURRENT_LATCHES.MICROINSTRUCTION);
-        if (offset == 0b01) {addition = SignExtend(CURRENT_LATCHES.IR, 6);}    
-        else if (offset == 0b10) {addition = SignExtend(CURRENT_LATCHES.IR, 9);}
-        else if (offset == 0b11) {addition = SignExtend(CURRENT_LATCHES.IR, 11);}
-        else {addition = 0;}
-        offset = (GetLSHF1(CURRENT_LATCHES.MICROINSTRUCTION)) ? offset << 1 : offset;
+        printf("GetADDR2MUX(CURRENT_LATCHES.MICROINSTRUCTION): %d\n", GetADDR2MUX(CURRENT_LATCHES.MICROINSTRUCTION));
+        if (offset == 0b01) {
+            addition = SignExtend(CURRENT_LATCHES.IR, 6);
+            printf("Offset6: %d\n", addition);
+        }    
+        else if (offset == 0b10) {
+            addition = SignExtend(CURRENT_LATCHES.IR, 9);
+            printf("Offset9: %d\n", addition);
+            }
+        else if (offset == 0b11) {
+            addition = SignExtend(CURRENT_LATCHES.IR, 11);
+            printf("Offset11: %d\n", addition);
+            }
+        else {printf("offset 0\n"); addition = 0;}
+        //addition = addition * 2;
+        //printf("GetLSHF1(CURRENT_LATCHES.MICROINSTRUCTION): %d\n", GetLSHF1(CURRENT_LATCHES.MICROINSTRUCTION));
+        addition = (GetLSHF1(CURRENT_LATCHES.MICROINSTRUCTION)) ? addition << 1 : addition;
         Gate_MARMUX = origin + addition;
+        printf("Gate_MARMUX = 0x%.4x, Origin = 0x%.4x, Addition = %d\n", Gate_MARMUX, origin, addition);
+
     }
-  }  else {Gate_MARMUX = 0;}
+  }  else {driveMM = 0;}
   
   if (GetGATE_PC(CURRENT_LATCHES.MICROINSTRUCTION)) {
     drivePC = 1;
@@ -816,6 +849,7 @@ void eval_bus_drivers() {
   } else {drivePC = 0;}
    
    if (GetGATE_ALU(CURRENT_LATCHES.MICROINSTRUCTION)) {
+    driveALU = 1;
     int sr1 = (GetSR1MUX(CURRENT_LATCHES.MICROINSTRUCTION)) ? CURRENT_LATCHES.REGS[getRegNum(6)] : CURRENT_LATCHES.REGS[getRegNum(9)]; 
     int sr2 = (CURRENT_LATCHES.IR & 0x0020) ? SignExtend(CURRENT_LATCHES.IR, 5) : CURRENT_LATCHES.REGS[getRegNum(0)];
     int op = GetALUK(CURRENT_LATCHES.MICROINSTRUCTION);
@@ -852,6 +886,7 @@ void eval_bus_drivers() {
     }
   } else {driveSHF = 0;}
   if (GetGATE_MDR(CURRENT_LATCHES.MICROINSTRUCTION)) {
+        printf("GetGATE_MDR(CURRENT_LATCHES.MICROINSTRUCTION) Activated\nLatching %.4x to Gate_MDR\n", CURRENT_LATCHES.MDR);
         driveMDR = 1;
         Gate_MDR = CURRENT_LATCHES.MDR;
   } else {driveMDR = 0;}
@@ -861,14 +896,26 @@ void eval_bus_drivers() {
     Gate_PC = Low16bits(Gate_PC);
     Gate_SHF = Low16bits(Gate_SHF);
     Gate_MDR = Low16bits(Gate_MDR);
+
+    printf("GetGATE_MARMUX: %d\n", GetGATE_MARMUX(CURRENT_LATCHES.MICROINSTRUCTION));
+    printf("GetGATE_ALU: %d\n", GetGATE_ALU(CURRENT_LATCHES.MICROINSTRUCTION));
+    printf("GetGATE_PC: %d\n", GetGATE_PC(CURRENT_LATCHES.MICROINSTRUCTION));
+    printf("GetGATE_SHF: %d\n", GetGATE_SHF(CURRENT_LATCHES.MICROINSTRUCTION));
+    printf("GetGATE_MDR: %d\n", GetGATE_MDR(CURRENT_LATCHES.MICROINSTRUCTION));
+    printf("Gate_MARMUX: 0x%.4x\n", Gate_MARMUX);
+    printf("Gate_ALU: 0x%.4x\n", Gate_ALU);
+    printf("Gate_PC: 0x%.4x\n", Gate_PC);
+    printf("Gate_SHF: 0x%.4x\n", Gate_SHF);
+    printf("Gate_MDR: 0x%.4x\n", Gate_MDR);
 }
   void drive_bus() {
-    
+    printf("Starting drive_bus()...\n");
     
   /* 
    * Datapath routine for driving the bus from one of the 5 possible 
    * tristate drivers. 
    */       
+    printf("driveMM = %d, drivePC = %d, driveALU = %d, driveSHF = %d, driveMDR = %d\n", driveMM, drivePC, driveALU, driveSHF, driveMDR);
 
     int origin, addition, regLocation, usePC;
     if (driveMM) {
@@ -893,6 +940,7 @@ void eval_bus_drivers() {
 
 
 void latch_datapath_values() {
+    printf("Starting latch_datapath_values()...\n\n");
 
   /* 
    * Datapath routine for computing all functions that need to latch
@@ -903,33 +951,49 @@ void latch_datapath_values() {
    *  LD.MAR	 LD.MDR	 LD.IR	 LD.BEN	 LD.REG	 LD.CC	 LD.PC
 
    */       
-  int currentU = CURRENT_LATCHES.MICROINSTRUCTION;
-  if (GetLD_MAR(currentU)) {
+  if (GetLD_MAR(CURRENT_LATCHES.MICROINSTRUCTION)) {
     NEXT_LATCHES.MAR = Low16bits(BUS);
   }
-
-  if (GetLD_MDR(currentU) && GetMIO_EN(currentU)) {
-    NEXT_LATCHES.MDR = (GetDATA_SIZE(currentU)) ? BUS : ((CURRENT_LATCHES.MAR % 2)) ? Low8bits(BUS) : getHighByte(BUS);
-  }
-
-  if (GetLD_IR(currentU)) {
-    NEXT_LATCHES.IR = Low16bits(BUS);
-  }
-
-  if (GetLD_BEN(currentU)) {
-    setBEN(currentU);
-  }
-
-  if (GetLD_REG(currentU)) {
-    if (GetDRMUX(currentU)) {
-        NEXT_LATCHES.REGS[7] = Low16bits(BUS);
-    } 
+  
+  printf("GetLD_MDR(CURRENT_LATCHES.MICROINSTRUCTION) = %d\n", GetLD_MDR(CURRENT_LATCHES.MICROINSTRUCTION));    
+  printf("GetMIO_EN(CURRENT_LATCHES.MICROINSTRUCTION) = %d\n", GetMIO_EN(CURRENT_LATCHES.MICROINSTRUCTION));  
+  if (GetLD_MDR(CURRENT_LATCHES.MICROINSTRUCTION) && GetMIO_EN(CURRENT_LATCHES.MICROINSTRUCTION) && CURRENT_LATCHES.READY) {
+    if (GetGATE_MDR(CURRENT_LATCHES.MICROINSTRUCTION)) {
+        NEXT_LATCHES.MDR = (GetDATA_SIZE(CURRENT_LATCHES.MICROINSTRUCTION)) ? BUS : ((CURRENT_LATCHES.MAR % 2)) ? Low8bits(BUS) : getHighByte(BUS);
+    }
     else {
-        NEXT_LATCHES.REGS[getRegNum(9)];
+
+        int address = (CURRENT_LATCHES.MAR / 2);
+        NEXT_LATCHES.MDR = Low8bits(MEMORY[address][0]);
+        NEXT_LATCHES.MDR |= (getHighByte(MEMORY[address][1]));
     }
   }
 
-  if (GetLD_CC(currentU)) {
+  if (GetLD_IR(CURRENT_LATCHES.MICROINSTRUCTION)) {
+    NEXT_LATCHES.IR = Low16bits(BUS);
+  }
+
+  if (GetLD_BEN(CURRENT_LATCHES.MICROINSTRUCTION)) {
+    int ir11, ir10, ir9;
+    int ir = CURRENT_LATCHES.IR;
+    ir11 = ( ir >> 11) & 0x0001;
+    ir10 = ( ir >> 10) & 0x0001;
+    ir9 = (  ir >> 9) & 0x0001;
+    NEXT_LATCHES.BEN = (ir11 && CURRENT_LATCHES.N) || (ir10 && CURRENT_LATCHES.Z) || (ir9 && CURRENT_LATCHES.P);
+  }
+
+    printf("GetLD_REG(CURRENT_LATCHES.MICROINSTRUCTION): %d\n", GetLD_REG(CURRENT_LATCHES.MICROINSTRUCTION));
+    printf("GetDRMUX(CURRENT_LATCHES.MICROINSTRUCTION): %d\n", GetDRMUX(CURRENT_LATCHES.MICROINSTRUCTION));
+    if (GetLD_REG(CURRENT_LATCHES.MICROINSTRUCTION)) {
+    if (GetDRMUX(CURRENT_LATCHES.MICROINSTRUCTION)) {
+        NEXT_LATCHES.REGS[7] = Low16bits(BUS);
+    } 
+    else {
+        NEXT_LATCHES.REGS[getRegNum(9)] = Low16bits(BUS);
+    }
+  }
+
+  if (GetLD_CC(CURRENT_LATCHES.MICROINSTRUCTION)) {
     NEXT_LATCHES.N = 0;
     NEXT_LATCHES.Z = 0;
     NEXT_LATCHES.P = 0;
@@ -945,8 +1009,8 @@ void latch_datapath_values() {
     } 
   }
 
-  if (GetLD_PC(currentU)) {
-    int pcMux = GetPCMUX(currentU);
+  if (GetLD_PC(CURRENT_LATCHES.MICROINSTRUCTION)) {
+    int pcMux = GetPCMUX(CURRENT_LATCHES.MICROINSTRUCTION);
     if (pcMux == 0b00) { // PC + 2
         NEXT_LATCHES.PC = Low16bits(CURRENT_LATCHES.PC + 2);
     } 
@@ -977,7 +1041,9 @@ void latch_datapath_values() {
         else {
             addition = 0;
         }
-        addition = (GetLSHF1(currentU)) ? addition << 1 : addition;   
+        addition = (GetLSHF1(CURRENT_LATCHES.MICROINSTRUCTION)) ? addition << 1 : addition;   
         NEXT_LATCHES.PC = origin + addition; 
+        NEXT_LATCHES.PC = Low16bits(NEXT_LATCHES.PC);
+        }
     }
 }
